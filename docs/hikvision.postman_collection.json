@@ -1,0 +1,522 @@
+{
+	"info": {
+		"_postman_id": "dc5800dc-8a73-4579-bd0c-0cae565e857d",
+		"name": "Hikvision",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "38149886"
+	},
+	"item": [
+		{
+			"name": "http://192.168.100.59/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json",
+			"request": {
+				"auth": {
+					"type": "digest",
+					"digest": [
+						{
+							"key": "password",
+							"value": "abc@1234",
+							"type": "string"
+						},
+						{
+							"key": "username",
+							"value": "admin",
+							"type": "string"
+						},
+						{
+							"key": "algorithm",
+							"value": "MD5",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "FaceDataRecord",
+							"value": "{\"faceLibType\":\"blackFD\",\"FDID\":\"1\",\"FPID\":\"8\"}",
+							"type": "text"
+						},
+						{
+							"key": "FaceImage",
+							"type": "file",
+							"src": []
+						}
+					]
+				},
+				"url": {
+					"raw": "http://192.168.100.59/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json",
+					"protocol": "http",
+					"host": [
+						"192",
+						"168",
+						"100",
+						"59"
+					],
+					"path": [
+						"ISAPI",
+						"Intelligent",
+						"FDLib",
+						"FaceDataRecord"
+					],
+					"query": [
+						{
+							"key": "format",
+							"value": "json"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://192.168.100.59/ISAPI/AccessControl/UserInfo/Record?format=json",
+			"request": {
+				"auth": {
+					"type": "digest",
+					"digest": [
+						{
+							"key": "password",
+							"value": "abc@1234",
+							"type": "string"
+						},
+						{
+							"key": "username",
+							"value": "admin",
+							"type": "string"
+						},
+						{
+							"key": "algorithm",
+							"value": "MD5",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\"UserInfo\":\r\n{\"employeeNo\":\"16\",\r\n\"name\": \"Test\",\r\n\"userType\":\"normal\",\r\n\"Valid\":{\"enable\":true,\"beginTime\":\"2024-10-01T17:30:08\",\"endTime\":\"2025-10-01T17:30:08\"},\r\n\"doorRight\": \"1\",\r\n\"RightPlan\":[{\"doorNo\":1,\"planTemplateNo\":\"1\"}]\r\n}\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://192.168.100.59/ISAPI/AccessControl/UserInfo/Record?format=json",
+					"protocol": "http",
+					"host": [
+						"192",
+						"168",
+						"100",
+						"59"
+					],
+					"path": [
+						"ISAPI",
+						"AccessControl",
+						"UserInfo",
+						"Record"
+					],
+					"query": [
+						{
+							"key": "format",
+							"value": "json"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://invest-hr.novacode.uz/api/all/attendance/",
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"auth": {
+					"type": "digest",
+					"digest": [
+						{
+							"key": "password",
+							"value": "abc@1234",
+							"type": "string"
+						},
+						{
+							"key": "username",
+							"value": "admin",
+							"type": "string"
+						},
+						{
+							"key": "algorithm",
+							"value": "MD5",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\"UserInfoSearchCond\":\r\n{\"searchID\":\"1\",\r\n\"searchResultPosition\":0,\r\n\"maxResults\": 30,\r\n\"EmployeeNoList\":[{\"employeeNo\": \"1\"}]\r\n}\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://invest-hr.novacode.uz/api/all/attendance/",
+					"protocol": "http",
+					"host": [
+						"invest-hr",
+						"novacode",
+						"uz"
+					],
+					"path": [
+						"api",
+						"all",
+						"attendance",
+						""
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://192.168.100.59/ISAPI/AccessControl/AcsEvent?format=json",
+			"request": {
+				"auth": {
+					"type": "digest",
+					"digest": [
+						{
+							"key": "password",
+							"value": "abc@1234",
+							"type": "string"
+						},
+						{
+							"key": "username",
+							"value": "admin",
+							"type": "string"
+						},
+						{
+							"key": "algorithm",
+							"value": "MD5",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\"AcsEventCond\":{\"searchID\":\"5\",\"searchResultPosition\":0,\"maxResults\":100000,\"major\":0,\"minor\":0,\"startTime\": \"2024-11-06T00:00:00+05:00\",\"endTime\": \"2024-11-06T23:59:00+05:00\", \"eventAttribute\": \"faceOrFpOrCardOrPw\"}}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://192.168.100.59/ISAPI/AccessControl/AcsEvent?format=json",
+					"protocol": "http",
+					"host": [
+						"192",
+						"168",
+						"100",
+						"59"
+					],
+					"path": [
+						"ISAPI",
+						"AccessControl",
+						"AcsEvent"
+					],
+					"query": [
+						{
+							"key": "format",
+							"value": "json"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://192.168.100.59/ISAPI/Intelligent/FDLib?format=json",
+			"request": {
+				"auth": {
+					"type": "digest",
+					"digest": [
+						{
+							"key": "password",
+							"value": "abc@1234",
+							"type": "string"
+						},
+						{
+							"key": "username",
+							"value": "admin",
+							"type": "string"
+						},
+						{
+							"key": "algorithm",
+							"value": "MD5",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"FDID\": \"1\",                   // Unique ID for the face library (choose a unique identifier)\r\n    \"name\": \"MyFaceLibrary\",        // Name of the face library\r\n    \"faceLibType\": \"blackFD\"        // Type of face library, typically \"blackFD\" or \"whiteFD\"\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://192.168.100.59/ISAPI/Intelligent/FDLib?format=json",
+					"protocol": "http",
+					"host": [
+						"192",
+						"168",
+						"100",
+						"59"
+					],
+					"path": [
+						"ISAPI",
+						"Intelligent",
+						"FDLib"
+					],
+					"query": [
+						{
+							"key": "format",
+							"value": "json"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://192.168.100.59/ISAPI/Intelligent/FDLib/FDModify?format=json.",
+			"request": {
+				"auth": {
+					"type": "digest",
+					"digest": [
+						{
+							"key": "password",
+							"value": "abc@1234",
+							"type": "string"
+						},
+						{
+							"key": "username",
+							"value": "admin",
+							"type": "string"
+						},
+						{
+							"key": "algorithm",
+							"value": "MD5",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "FaceDataRecord",
+							"value": "{\"faceLibType\":\"blackFD\",\"FDID\":\"1\",\"FPID\":\"8\"}",
+							"type": "text"
+						},
+						{
+							"key": "FaceImage",
+							"type": "file",
+							"src": "postman-cloud:///1ef96abb-cbd9-45d0-a307-800bae27bcca"
+						}
+					]
+				},
+				"url": {
+					"raw": "http://192.168.100.59/ISAPI/Intelligent/FDLib/FDModify?format=json.",
+					"protocol": "http",
+					"host": [
+						"192",
+						"168",
+						"100",
+						"59"
+					],
+					"path": [
+						"ISAPI",
+						"Intelligent",
+						"FDLib",
+						"FDModify"
+					],
+					"query": [
+						{
+							"key": "format",
+							"value": "json."
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://192.168.100.59/ISAPI/AccessControl/UserInfo/Count?format=json",
+			"request": {
+				"auth": {
+					"type": "digest",
+					"digest": [
+						{
+							"key": "password",
+							"value": "abc@1234",
+							"type": "string"
+						},
+						{
+							"key": "username",
+							"value": "admin",
+							"type": "string"
+						},
+						{
+							"key": "algorithm",
+							"value": "MD5",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://192.168.100.59/ISAPI/AccessControl/UserInfo/Count?format=json",
+					"protocol": "http",
+					"host": [
+						"192",
+						"168",
+						"100",
+						"59"
+					],
+					"path": [
+						"ISAPI",
+						"AccessControl",
+						"UserInfo",
+						"Count"
+					],
+					"query": [
+						{
+							"key": "format",
+							"value": "json"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://192.168.100.59/ISAPI/Publish/TerminalMgr",
+			"request": {
+				"auth": {
+					"type": "digest",
+					"digest": [
+						{
+							"key": "password",
+							"value": "abc@1234",
+							"type": "string"
+						},
+						{
+							"key": "username",
+							"value": "admin",
+							"type": "string"
+						},
+						{
+							"key": "algorithm",
+							"value": "MD5",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://192.168.100.59/ISAPI/Publish/TerminalMgr",
+					"protocol": "http",
+					"host": [
+						"192",
+						"168",
+						"100",
+						"59"
+					],
+					"path": [
+						"ISAPI",
+						"Publish",
+						"TerminalMgr"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "http://192.168.100.59/ISAPI/AccessControl/UserInfo/Delete?format=json",
+			"request": {
+				"auth": {
+					"type": "digest",
+					"digest": [
+						{
+							"key": "password",
+							"value": "abc@1234",
+							"type": "string"
+						},
+						{
+							"key": "username",
+							"value": "admin",
+							"type": "string"
+						},
+						{
+							"key": "algorithm",
+							"value": "MD5",
+							"type": "string"
+						}
+					]
+				},
+				"method": "PUT",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\"UserInfoDelCond\": \r\n{\"EmployeeNoList\": [{\"employeeNo\": \"2a9EevLu7CTUxfWGVHwb\"}]\r\n}\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://192.168.100.59/ISAPI/AccessControl/UserInfo/Delete?format=json",
+					"protocol": "http",
+					"host": [
+						"192",
+						"168",
+						"100",
+						"59"
+					],
+					"path": [
+						"ISAPI",
+						"AccessControl",
+						"UserInfo",
+						"Delete"
+					],
+					"query": [
+						{
+							"key": "format",
+							"value": "json"
+						}
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
