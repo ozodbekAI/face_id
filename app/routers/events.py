@@ -1,221 +1,276 @@
 import datetime as dt
-import hashlib
-import uuid
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..core.config import settings
 from ..core.db import get_db
 from ..deps import require_company
 from ..models import EventLog, User
-from ..schemas import EventCreateIn, EventOut, AttendanceDayOut
-from ..utils import parse_employee_no
-from ..ws_manager import manager
-
+from ..schemas import EventOut, EventOutDetailed, EventPageOut, AttendanceRowOut, AttendancePageOut
 
 router = APIRouter(prefix="/companies/{company_id}", tags=["events"])
 
 
-def _parse_ts(ts: str | None) -> dt.datetime:
-    if not ts:
-        return dt.datetime.now(dt.timezone.utc)
-    try:
-        v = dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        if v.tzinfo is None:
-            v = v.replace(tzinfo=dt.timezone.utc)
-        return v.astimezone(dt.timezone.utc)
-    except Exception:
-        return dt.datetime.now(dt.timezone.utc)
+def _parse_range(*, start: str | None, end: str | None, tz: dt.tzinfo) -> tuple[dt.datetime | None, dt.datetime | None]:
+    """Parse a datetime/date range.
+
+    - If value contains 'T' -> ISO datetime.
+    - If value looks like YYYY-MM-DD -> interpreted as local date boundary in tz.
+    Returns UTC datetimes.
+    """
+
+    def _parse_one(v: str | None, is_end: bool) -> dt.datetime | None:
+        if not v:
+            return None
+        v = v.strip()
+        try:
+            if "T" in v:
+                x = dt.datetime.fromisoformat(v.replace("Z", "+00:00"))
+                if x.tzinfo is None:
+                    x = x.replace(tzinfo=dt.timezone.utc)
+                return x.astimezone(dt.timezone.utc)
+            # date only
+            d = dt.date.fromisoformat(v)
+            base = dt.datetime.combine(d, dt.time.min).replace(tzinfo=tz)
+            if is_end:
+                base = base + dt.timedelta(days=1)
+            return base.astimezone(dt.timezone.utc)
+        except Exception:
+            return None
+
+    return _parse_one(start, False), _parse_one(end, True)
 
 
-@router.post("/events", response_model=EventOut)
-async def ingest_event(
+@router.get("/events", response_model=EventPageOut)
+def list_events(
     company_id: int,
-    body: EventCreateIn,
-    db: Session = Depends(get_db),
-    company=Depends(require_company),
-):
-    """Edge/local backend sends access events here (HTTP)."""
-    if company.id != company_id:
-        raise HTTPException(403, "Wrong company")
-
-    employee_no = (body.employee_no or "").strip()
-    if not employee_no:
-        raise HTTPException(422, "employee_no required")
-
-    parsed = parse_employee_no(employee_no)
-    user_id = None
-    if parsed:
-        c_id, u_id = parsed
-        if c_id != company_id:
-            raise HTTPException(422, "employee_no company_id mismatch")
-        # Make sure user exists in this company
-        u = db.get(User, u_id)
-        if not u or u.company_id != company_id:
-            raise HTTPException(404, "User not found for employee_no")
-        user_id = u_id
-
-    ts_dt = _parse_ts(body.ts)
-
-    # Idempotency: if device didn't provide event_id, derive a stable hash
-    event_id = body.event_id
-    if not event_id:
-        seed = {
-            "company_id": company_id,
-            "employee_no": employee_no,
-            "device_id": body.device_id,
-            "event_type": body.event_type,
-            "ts": ts_dt.isoformat(),
-            "payload": body.payload,
-        }
-        event_id = hashlib.sha256(str(seed).encode()).hexdigest()[:32]
-
-    existing = db.query(EventLog).filter(EventLog.event_id == event_id).first()
-    if existing:
-        return EventOut(
-            id=existing.id,
-            event_id=existing.event_id,
-            company_id=existing.company_id,
-            user_id=existing.user_id,
-            employee_no=existing.employee_no,
-            device_id=existing.device_id,
-            event_type=existing.event_type,
-            ts=existing.ts.astimezone(dt.timezone.utc).isoformat(),
-        )
-
-    ev = EventLog(
-        event_id=event_id,
-        company_id=company_id,
-        user_id=user_id,
-        employee_no=employee_no,
-        device_id=body.device_id,
-        event_type=body.event_type or "access",
-        payload=body.payload or {},
-        ts=ts_dt,
-    )
-    db.add(ev)
-    db.commit()
-    db.refresh(ev)
-
-    # Broadcast to company WS clients
-    await manager.broadcast_to_clients(company_id, {
-        "type": "events.access",
-        "data": {
-            "company_id": company_id,
-            "user_id": user_id,
-            "employee_no": employee_no,
-            "device_id": body.device_id,
-            "event_type": body.event_type or "access",
-            "ts": ts_dt.isoformat(),
-            "payload": body.payload or {},
-        }
-    })
-
-    return EventOut(
-        id=ev.id,
-        event_id=ev.event_id,
-        company_id=ev.company_id,
-        user_id=ev.user_id,
-        employee_no=ev.employee_no,
-        device_id=ev.device_id,
-        event_type=ev.event_type,
-        ts=ev.ts.astimezone(dt.timezone.utc).isoformat(),
-    )
-
-
-@router.get("/users/{user_id}/attendance", response_model=AttendanceDayOut)
-def attendance_day(
-    company_id: int,
-    user_id: int,
-    date: str | None = Query(None, description="YYYY-MM-DD. Default=today in company timezone"),
+    user_id: int | None = Query(None),
+    employee_no: str | None = Query(None),
+    device_id: str | None = Query(None),
+    event_type: str | None = Query(None),
+    has_user: bool | None = Query(
+        None,
+        description="If true: only mapped events. If false: only unmapped events.",
+    ),
+    start: str | None = Query(None, description="ISO datetime or YYYY-MM-DD (company timezone)"),
+    end: str | None = Query(None, description="ISO datetime or YYYY-MM-DD (company timezone)"),
+    q: str | None = Query(None, description="Search in employee_no/device_id/event_type"),
+    include_payload: bool = Query(False),
+    sort: str = Query("-ts", description="ts,-ts,id,-id"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
     company=Depends(require_company),
 ):
     if company.id != company_id:
         raise HTTPException(403, "Wrong company")
-
-    u = db.get(User, user_id)
-    if not u or u.company_id != company_id:
-        raise HTTPException(404, "User not found")
 
     try:
         tz = ZoneInfo(settings.COMPANY_TZ)
     except Exception:
         tz = dt.timezone.utc
 
-    if date:
-        d = dt.date.fromisoformat(date)
+    start_utc, end_utc = _parse_range(start=start, end=end, tz=tz)
+
+    qry = db.query(EventLog).filter(EventLog.company_id == company_id)
+    if user_id is not None:
+        qry = qry.filter(EventLog.user_id == user_id)
+    if employee_no:
+        qry = qry.filter(EventLog.employee_no == employee_no.strip())
+    if device_id:
+        qry = qry.filter(EventLog.device_id == device_id.strip())
+    if event_type:
+        qry = qry.filter(EventLog.event_type == event_type.strip())
+    if has_user is not None:
+        qry = qry.filter(EventLog.user_id.isnot(None)) if has_user else qry.filter(EventLog.user_id.is_(None))
+    if start_utc:
+        qry = qry.filter(EventLog.ts >= start_utc)
+    if end_utc:
+        qry = qry.filter(EventLog.ts < end_utc)
+    if q:
+        qq = f"%{q.strip().lower()}%"
+        qry = qry.filter(
+            func.lower(func.coalesce(EventLog.employee_no, "")).like(qq)
+            | func.lower(func.coalesce(EventLog.device_id, "")).like(qq)
+            | func.lower(func.coalesce(EventLog.event_type, "")).like(qq)
+        )
+
+    total = qry.count()
+
+    if sort == "ts":
+        qry = qry.order_by(EventLog.ts.asc())
+    elif sort == "-ts":
+        qry = qry.order_by(EventLog.ts.desc())
+    elif sort == "id":
+        qry = qry.order_by(EventLog.id.asc())
     else:
-        d = dt.datetime.now(tz).date()
+        qry = qry.order_by(EventLog.id.desc())
 
-    start_local = dt.datetime.combine(d, dt.time.min).replace(tzinfo=tz)
-    end_local = start_local + dt.timedelta(days=1)
+    xs = qry.offset((page - 1) * limit).limit(limit).all()
 
+    if include_payload:
+        items = [
+            EventOutDetailed(
+                id=e.id,
+                event_id=e.event_id,
+                company_id=e.company_id,
+                user_id=e.user_id,
+                employee_no=e.employee_no,
+                device_id=e.device_id,
+                event_type=e.event_type,
+                ts=e.ts.astimezone(dt.timezone.utc).isoformat(),
+                payload=e.payload or {},
+            )
+            for e in xs
+        ]
+    else:
+        items = [
+            EventOut(
+                id=e.id,
+                event_id=e.event_id,
+                company_id=e.company_id,
+                user_id=e.user_id,
+                employee_no=e.employee_no,
+                device_id=e.device_id,
+                event_type=e.event_type,
+                ts=e.ts.astimezone(dt.timezone.utc).isoformat(),
+            )
+            for e in xs
+        ]
+
+    return {"total": total, "items": items}
+
+
+@router.get("/attendance/days", response_model=AttendancePageOut)
+def attendance_days(
+    company_id: int,
+    start_date: str | None = Query(None, description="YYYY-MM-DD (company timezone). Default: last 7 days"),
+    end_date: str | None = Query(None, description="YYYY-MM-DD (company timezone). Default: today"),
+    user_id: int | None = Query(None),
+    q: str | None = Query(None, description="Search users by name/phone"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    company=Depends(require_company),
+):
+    """Attendance (first_in/last_out) per user per day.
+
+    Computed from EventLog (mapped events only). Date boundaries use settings.COMPANY_TZ.
+    """
+    if company.id != company_id:
+        raise HTTPException(403, "Wrong company")
+
+    try:
+        tz = ZoneInfo(settings.COMPANY_TZ)
+    except Exception:
+        tz = dt.timezone.utc
+
+    today = dt.datetime.now(tz).date()
+    end_d = dt.date.fromisoformat(end_date) if end_date else today
+    start_d = dt.date.fromisoformat(start_date) if start_date else (end_d - dt.timedelta(days=6))
+    if start_d > end_d:
+        start_d, end_d = end_d, start_d
+
+    start_local = dt.datetime.combine(start_d, dt.time.min).replace(tzinfo=tz)
+    end_local = dt.datetime.combine(end_d, dt.time.min).replace(tzinfo=tz) + dt.timedelta(days=1)
     start_utc = start_local.astimezone(dt.timezone.utc)
     end_utc = end_local.astimezone(dt.timezone.utc)
 
-    q = db.query(EventLog).filter(
-        EventLog.company_id == company_id,
-        EventLog.user_id == user_id,
-        EventLog.ts >= start_utc,
-        EventLog.ts < end_utc,
-    )
-
-    count = q.count()
-    first = q.order_by(EventLog.ts.asc()).first()
-    last = q.order_by(EventLog.ts.desc()).first() if count > 1 else None
-
-    return AttendanceDayOut(
-        company_id=company_id,
-        user_id=user_id,
-        date=d.isoformat(),
-        first_in=first.ts.astimezone(tz).isoformat() if first else None,
-        last_out=last.ts.astimezone(tz).isoformat() if last else None,
-        events_count=count,
-    )
-
-
-@router.get("/users/{user_id}/events", response_model=list[EventOut])
-def list_user_events(
-    company_id: int,
-    user_id: int,
-    date: str | None = Query(None, description="YYYY-MM-DD (company timezone)"),
-    limit: int = Query(200, ge=1, le=2000),
-    db: Session = Depends(get_db),
-    company=Depends(require_company),
-):
-    if company.id != company_id:
-        raise HTTPException(403, "Wrong company")
-
-    u = db.get(User, user_id)
-    if not u or u.company_id != company_id:
-        raise HTTPException(404, "User not found")
-
-    try:
-        tz = ZoneInfo(settings.COMPANY_TZ)
-    except Exception:
-        tz = dt.timezone.utc
-
-    q = db.query(EventLog).filter(EventLog.company_id == company_id, EventLog.user_id == user_id)
-    if date:
-        d = dt.date.fromisoformat(date)
-        start_local = dt.datetime.combine(d, dt.time.min).replace(tzinfo=tz)
-        end_local = start_local + dt.timedelta(days=1)
-        q = q.filter(EventLog.ts >= start_local.astimezone(dt.timezone.utc), EventLog.ts < end_local.astimezone(dt.timezone.utc))
-
-    xs = q.order_by(EventLog.ts.asc()).limit(limit).all()
-    return [
-        EventOut(
-            id=e.id,
-            event_id=e.event_id,
-            company_id=e.company_id,
-            user_id=e.user_id,
-            employee_no=e.employee_no,
-            device_id=e.device_id,
-            event_type=e.event_type,
-            ts=e.ts.astimezone(dt.timezone.utc).isoformat(),
+    # Optional user filter by query
+    allowed_user_ids: set[int] | None = None
+    if q:
+        qq = f"%{q.strip().lower()}%"
+        ids = (
+            db.query(User.id)
+            .filter(User.company_id == company_id)
+            .filter(
+                func.lower(User.first_name).like(qq)
+                | func.lower(User.last_name).like(qq)
+                | func.lower(func.coalesce(User.phone, "")).like(qq)
+            )
+            .all()
         )
-        for e in xs
-    ]
+        allowed_user_ids = {int(x[0]) for x in ids}
+        if not allowed_user_ids:
+            return {"total": 0, "items": []}
+
+    if user_id is not None:
+        allowed_user_ids = {user_id} if allowed_user_ids is None else (allowed_user_ids & {user_id})
+        if not allowed_user_ids:
+            return {"total": 0, "items": []}
+
+    q_ev = (
+        db.query(EventLog.user_id, EventLog.ts)
+        .filter(
+            EventLog.company_id == company_id,
+            EventLog.user_id.isnot(None),
+            EventLog.ts >= start_utc,
+            EventLog.ts < end_utc,
+        )
+    )
+    if allowed_user_ids is not None:
+        q_ev = q_ev.filter(EventLog.user_id.in_(sorted(list(allowed_user_ids))))
+
+    rows = q_ev.all()
+    buckets: dict[tuple[int, str], dict[str, Any]] = {}
+
+    for uid, ts in rows:
+        if uid is None:
+            continue
+        ts_utc = ts if ts.tzinfo else ts.replace(tzinfo=dt.timezone.utc)
+        local = ts_utc.astimezone(tz)
+        d = local.date().isoformat()
+        key = (int(uid), d)
+        b = buckets.get(key)
+        if not b:
+            buckets[key] = {"min": ts_utc, "max": ts_utc, "count": 1}
+        else:
+            b["count"] += 1
+            if ts_utc < b["min"]:
+                b["min"] = ts_utc
+            if ts_utc > b["max"]:
+                b["max"] = ts_utc
+
+    if not buckets:
+        return {"total": 0, "items": []}
+
+    # Fetch user info
+    user_ids = sorted({uid for (uid, _d) in buckets.keys()})
+    users = db.query(User).filter(User.company_id == company_id, User.id.in_(user_ids)).all()
+    umap = {u.id: u for u in users}
+
+    items_all: list[AttendanceRowOut] = []
+    for (uid, d), info in buckets.items():
+        u = umap.get(uid)
+        first_ts = info["min"]
+        last_ts = info["max"]
+        try:
+            dur = int((last_ts - first_ts).total_seconds() // 60) if last_ts and first_ts else None
+        except Exception:
+            dur = None
+
+        items_all.append(
+            AttendanceRowOut(
+                company_id=company_id,
+                user_id=uid,
+                date=d,
+                first_in=first_ts.astimezone(tz).isoformat() if first_ts else None,
+                last_out=last_ts.astimezone(tz).isoformat() if last_ts else None,
+                duration_min=dur,
+                events_count=int(info["count"]),
+                first_name=u.first_name if u else None,
+                last_name=u.last_name if u else None,
+                phone=u.phone if u else None,
+            )
+        )
+
+    # Sort: newest date first, then user_id
+    items_all.sort(key=lambda x: (x.date, x.user_id), reverse=True)
+    total = len(items_all)
+    start_i = (page - 1) * limit
+    end_i = start_i + limit
+    return {"total": total, "items": items_all[start_i:end_i]}

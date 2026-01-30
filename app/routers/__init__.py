@@ -1,1 +1,1 @@
-from . import admin, users, ws, media, logs, events
+from . import admin, users, ws, logs, events, hik_vision_push

@@ -1,18 +1,18 @@
-from typing import Optional
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
 from ..deps import require_company
-from ..models import User
-from ..schemas import UserOut
-from ..crud import save_upload, create_user, create_job, make_image_url
+from ..models import User, EventLog
+from ..schemas import UserOut, UserPageOut, UserCreate, UserUpdate
+from ..crud import create_user
 from ..ws_manager import manager
 
 router = APIRouter(prefix="/companies/{company_id}", tags=["users"])
 
+
 def user_to_out(company, u: User) -> UserOut:
-    image_url = make_image_url(company, u.image_filename) if u.image_filename else None
     return UserOut(
         id=u.id,
         company_id=u.company_id,
@@ -20,50 +20,36 @@ def user_to_out(company, u: User) -> UserOut:
         last_name=u.last_name,
         phone=u.phone,
         employee_no=u.employee_no,
-        image_url=image_url,
+        enroll_code=str(u.employee_no or u.id),
         status=u.status,
         last_error=u.last_error,
     )
 
+
 @router.post("/users", response_model=UserOut)
 async def create_user_ep(
     company_id: int,
-    first_name: str = Form(...),
-    last_name: str = Form(...),
-    phone: Optional[str] = Form(None),
-    image: Optional[UploadFile] = File(None),
+    body: UserCreate,
     db: Session = Depends(get_db),
-    company = Depends(require_company),
+    company=Depends(require_company),
 ):
     if company.id != company_id:
         raise HTTPException(403, "Wrong company")
 
-    image_filename = save_upload(image) if image else None
-    u = create_user(db, company, first_name, last_name, phone, image_filename)
+    u = create_user(db, company, body.first_name, body.last_name, body.phone)
 
-    payload = {
-        "company_id": company.id,
-        "user_id": u.id,
-        "employee_no": u.employee_no,
-        "first_name": u.first_name,
-        "last_name": u.last_name,
-        "phone": u.phone,
-        "image_url": make_image_url(company, u.image_filename) if u.image_filename else None,
-    }
-    job = create_job(db, company.id, u.id, "create", u.employee_no, payload)
+    out = user_to_out(company, u)
+    await manager.broadcast_to_clients(company.id, {"type": "users.created", "data": out.model_dump()})
+    return out
 
-    # try push to edge immediately
-    if manager.edge_connected(company.id):
-        await manager.send_to_edges(company.id, {"type": "user.provision", "data": {"job_id": job.id, **payload}})
-        # mark sent
-        job.status = "sent"
-        db.add(job)
-        db.commit()
-
-    return user_to_out(company, u)
 
 @router.get("/users/{user_id}", response_model=UserOut)
-def get_user_ep(company_id: int, user_id: int, db: Session = Depends(get_db), company=Depends(require_company)):
+def get_user_ep(
+    company_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+    company=Depends(require_company),
+):
     if company.id != company_id:
         raise HTTPException(403, "Wrong company")
     u = db.get(User, user_id)
@@ -71,21 +57,46 @@ def get_user_ep(company_id: int, user_id: int, db: Session = Depends(get_db), co
         raise HTTPException(404, "User not found")
     return user_to_out(company, u)
 
-@router.get("/users", response_model=list[UserOut])
-def list_users_ep(company_id: int, db: Session = Depends(get_db), company=Depends(require_company)):
+
+@router.get("/users", response_model=UserPageOut)
+def list_users_ep(
+    company_id: int,
+    q: str | None = Query(None, description="Search by name/phone/employee_no"),
+    status: str | None = Query(None, description="pending|active|failed|deleted"),
+    enrolled: bool | None = Query(None, description="Filter users that have at least one mapped event"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    company=Depends(require_company),
+):
     if company.id != company_id:
         raise HTTPException(403, "Wrong company")
-    xs = db.query(User).filter(User.company_id == company_id).order_by(User.id.desc()).all()
-    return [user_to_out(company, u) for u in xs]
+
+    qry = db.query(User).filter(User.company_id == company_id)
+    if status:
+        qry = qry.filter(User.status == status)
+    if q:
+        qq = f"%{q.strip().lower()}%"
+        qry = qry.filter(
+            func.lower(User.first_name).like(qq)
+            | func.lower(User.last_name).like(qq)
+            | func.lower(func.coalesce(User.phone, "")).like(qq)
+            | func.lower(func.coalesce(User.employee_no, "")).like(qq)
+        )
+    if enrolled is not None:
+        ex = db.query(EventLog.id).filter(EventLog.company_id == company_id, EventLog.user_id == User.id).exists()
+        qry = qry.filter(ex) if enrolled else qry.filter(~ex)
+
+    total = qry.count()
+    xs = qry.order_by(User.id.desc()).offset((page - 1) * limit).limit(limit).all()
+    return {"total": total, "items": [user_to_out(company, u) for u in xs]}
+
 
 @router.put("/users/{user_id}", response_model=UserOut)
 async def update_user_ep(
     company_id: int,
     user_id: int,
-    first_name: str = Form(...),
-    last_name: str = Form(...),
-    phone: str | None = Form(None),
-    image: UploadFile | None = File(None),
+    body: UserUpdate,
     db: Session = Depends(get_db),
     company=Depends(require_company),
 ):
@@ -95,38 +106,36 @@ async def update_user_ep(
     if not u or u.company_id != company_id:
         raise HTTPException(404, "User not found")
 
-    if image:
-        u.image_filename = save_upload(image)
-    u.first_name = first_name
-    u.last_name = last_name
-    u.phone = phone
-    u.status = "pending"
+    fs = body.model_fields_set  # only update provided fields
+
+    if "first_name" in fs:
+        u.first_name = body.first_name  # type: ignore[assignment]
+    if "last_name" in fs:
+        u.last_name = body.last_name  # type: ignore[assignment]
+    if "phone" in fs:
+        u.phone = body.phone
+    if "status" in fs and body.status is not None:
+        u.status = body.status
+
+    # any edit resets error unless you intentionally keep it
     u.last_error = None
+
     db.add(u)
     db.commit()
     db.refresh(u)
 
-    payload = {
-        "company_id": company.id,
-        "user_id": u.id,
-        "employee_no": u.employee_no,
-        "first_name": u.first_name,
-        "last_name": u.last_name,
-        "phone": u.phone,
-        "image_url": make_image_url(company, u.image_filename) if u.image_filename else None,
-    }
-    job = create_job(db, company.id, u.id, "update", u.employee_no, payload)
+    out = user_to_out(company, u)
+    await manager.broadcast_to_clients(company.id, {"type": "users.updated", "data": out.model_dump()})
+    return out
 
-    if manager.edge_connected(company.id):
-        await manager.send_to_edges(company.id, {"type": "user.update", "data": {"job_id": job.id, **payload}})
-        job.status = "sent"
-        db.add(job)
-        db.commit()
-
-    return user_to_out(company, u)
 
 @router.delete("/users/{user_id}")
-async def delete_user_ep(company_id: int, user_id: int, db: Session = Depends(get_db), company=Depends(require_company)):
+async def delete_user_ep(
+    company_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+    company=Depends(require_company),
+):
     if company.id != company_id:
         raise HTTPException(403, "Wrong company")
     u = db.get(User, user_id)
@@ -137,13 +146,5 @@ async def delete_user_ep(company_id: int, user_id: int, db: Session = Depends(ge
     db.add(u)
     db.commit()
 
-    payload = {"company_id": company.id, "user_id": u.id, "employee_no": u.employee_no}
-    job = create_job(db, company.id, u.id, "delete", u.employee_no, payload)
-
-    if manager.edge_connected(company.id):
-        await manager.send_to_edges(company.id, {"type": "user.delete", "data": {"job_id": job.id, **payload}})
-        job.status = "sent"
-        db.add(job)
-        db.commit()
-
+    await manager.broadcast_to_clients(company.id, {"type": "users.deleted", "data": {"user_id": u.id}})
     return {"ok": True}
