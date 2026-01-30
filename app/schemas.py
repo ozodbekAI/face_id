@@ -6,6 +6,63 @@ from pydantic import BaseModel, Field
 
 
 # ==========================
+# Auth / RBAC
+# ==========================
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: str
+
+    role: str
+    company_id: int | None = None
+
+
+class MeResponse(BaseModel):
+    id: int
+    username: str
+    role: str
+    company_id: int | None = None
+    is_active: bool
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=6, max_length=200)
+
+
+class OwnerCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=120)
+    company_id: int
+    password: str | None = Field(default=None, min_length=6, max_length=200)
+
+
+class OwnerOut(BaseModel):
+    id: int
+    username: str
+    role: str
+    company_id: int
+    is_active: bool
+    created_at: str | None = None
+
+
+class OwnerCreatedResponse(OwnerOut):
+    # returned only on create/reset
+    password: str
+
+
+class OwnerPageOut(BaseModel):
+    total: int
+    items: list[OwnerOut]
+
+
+# ==========================
 # Company
 # ==========================
 

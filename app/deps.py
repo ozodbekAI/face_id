@@ -1,22 +1,68 @@
-from fastapi import Header, HTTPException, Depends
+from __future__ import annotations
+
+from fastapi import Depends, Header, HTTPException, Request, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from .core.db import get_db
-from .core.config import settings
-from .crud import get_company_by_api_key
+from .crud import get_account_by_session_token, get_company
+from .models import Account, Company
 
-def require_company(x_api_key: str = Header(..., alias="X-API-Key"), db: Session = Depends(get_db)):
-    c = get_company_by_api_key(db, x_api_key)
+
+bearer_scheme = HTTPBearer()
+
+
+def _bearer_token(authorization: str | None) -> str | None:
+    if not authorization:
+        return None
+    parts = authorization.split()
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return None
+
+
+def require_account(
+    db: Session = Depends(get_db),
+    cred: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+) -> Account:
+    if not cred or not cred.credentials:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    if (cred.scheme or "").lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    token = cred.credentials.strip()
+    acc = get_account_by_session_token(db, token)
+    if not acc:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    return acc
+
+
+def require_admin(acc: Account = Depends(require_account)) -> Account:
+    if acc.role != "admin":
+        raise HTTPException(403, "Admin only")
+    return acc
+
+
+def require_owner(acc: Account = Depends(require_account)) -> Account:
+    if acc.role != "owner":
+        raise HTTPException(403, "Owner only")
+    if not acc.company_id:
+        raise HTTPException(403, "Owner must be bound to a company")
+    return acc
+
+
+def require_company_access(
+    company_id: int,
+    acc: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> Company:
+    # admin -> any company
+    if acc.role == "owner":
+        if acc.company_id != company_id:
+            raise HTTPException(403, "Wrong company")
+    c = get_company(db, company_id)
     if not c:
-        raise HTTPException(401, "Invalid API key")
+        raise HTTPException(404, "Company not found")
     return c
-
-
-def require_admin(x_admin_key: str | None = Header(None, alias="X-Admin-Key")):
-    """Protect /admin endpoints.
-
-    If settings.ADMIN_KEY is empty, admin endpoints are open (useful for local/dev).
-    """
-    if settings.ADMIN_KEY and x_admin_key != settings.ADMIN_KEY:
-        raise HTTPException(401, "Invalid admin key")
-    return True

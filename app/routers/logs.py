@@ -1,8 +1,9 @@
 import os
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 
 from ..core.config import settings
+from ..deps import require_admin
 
 router = APIRouter(prefix="/logs", tags=["logs"])
 
@@ -11,6 +12,7 @@ router = APIRouter(prefix="/logs", tags=["logs"])
 def tail_log(
     name: str = Query("app.log", description="log file name"),
     lines: int = Query(200, ge=1, le=2000),
+    _=Depends(require_admin),
 ):
     if "/" in name or "\\" in name:
         raise HTTPException(400, "invalid log name")

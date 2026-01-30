@@ -3,7 +3,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
-from ..deps import require_company
+from ..deps import require_company_access
 from ..models import User, EventLog
 from ..schemas import UserOut, UserPageOut, UserCreate, UserUpdate
 from ..crud import create_user
@@ -31,11 +31,8 @@ async def create_user_ep(
     company_id: int,
     body: UserCreate,
     db: Session = Depends(get_db),
-    company=Depends(require_company),
+    company=Depends(require_company_access),
 ):
-    if company.id != company_id:
-        raise HTTPException(403, "Wrong company")
-
     u = create_user(db, company, body.first_name, body.last_name, body.phone)
 
     out = user_to_out(company, u)
@@ -48,10 +45,8 @@ def get_user_ep(
     company_id: int,
     user_id: int,
     db: Session = Depends(get_db),
-    company=Depends(require_company),
+    company=Depends(require_company_access),
 ):
-    if company.id != company_id:
-        raise HTTPException(403, "Wrong company")
     u = db.get(User, user_id)
     if not u or u.company_id != company_id:
         raise HTTPException(404, "User not found")
@@ -67,10 +62,8 @@ def list_users_ep(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
-    company=Depends(require_company),
+    company=Depends(require_company_access),
 ):
-    if company.id != company_id:
-        raise HTTPException(403, "Wrong company")
 
     qry = db.query(User).filter(User.company_id == company_id)
     if status:
@@ -98,10 +91,8 @@ async def update_user_ep(
     user_id: int,
     body: UserUpdate,
     db: Session = Depends(get_db),
-    company=Depends(require_company),
+    company=Depends(require_company_access),
 ):
-    if company.id != company_id:
-        raise HTTPException(403, "Wrong company")
     u = db.get(User, user_id)
     if not u or u.company_id != company_id:
         raise HTTPException(404, "User not found")
@@ -134,10 +125,8 @@ async def delete_user_ep(
     company_id: int,
     user_id: int,
     db: Session = Depends(get_db),
-    company=Depends(require_company),
+    company=Depends(require_company_access),
 ):
-    if company.id != company_id:
-        raise HTTPException(403, "Wrong company")
     u = db.get(User, user_id)
     if not u or u.company_id != company_id:
         raise HTTPException(404, "User not found")

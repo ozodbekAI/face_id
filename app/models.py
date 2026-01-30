@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .core.db import Base
@@ -19,6 +19,54 @@ class Company(Base):
     )
 
     users = relationship("User", back_populates="company", cascade="all, delete-orphan")
+
+
+class Account(Base):
+    """Platform accounts.
+
+    role:
+      - admin: superuser, can manage all companies
+      - owner: tenant admin, bound to a single company
+    """
+
+    __tablename__ = "accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), index=True, nullable=False)  # admin|owner
+
+    company_id: Mapped[int | None] = mapped_column(
+        ForeignKey("companies.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    last_login_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    company = relationship("Company")
+    sessions = relationship("AccountSession", back_populates="account", cascade="all, delete-orphan")
+
+
+class AccountSession(Base):
+    __tablename__ = "account_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_seen_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user_agent: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    account = relationship("Account", back_populates="sessions")
 
 
 class User(Base):

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..core.config import settings
 from ..core.db import get_db
-from ..deps import require_company
+from ..deps import require_owner
 from ..models import EventLog, User
 from ..schemas import EventOut, EventOutDetailed, EventPageOut, AttendanceRowOut, AttendancePageOut
 
@@ -64,10 +64,8 @@ def list_events(
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
-    company=Depends(require_company),
+    company=Depends(require_owner),
 ):
-    if company.id != company_id:
-        raise HTTPException(403, "Wrong company")
 
     try:
         tz = ZoneInfo(settings.COMPANY_TZ)
@@ -155,15 +153,8 @@ def attendance_days(
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
-    company=Depends(require_company),
+    company=Depends(require_owner),
 ):
-    """Attendance (first_in/last_out) per user per day.
-
-    Computed from EventLog (mapped events only). Date boundaries use settings.COMPANY_TZ.
-    """
-    if company.id != company_id:
-        raise HTTPException(403, "Wrong company")
-
     try:
         tz = ZoneInfo(settings.COMPANY_TZ)
     except Exception:
