@@ -183,3 +183,24 @@ class AttendanceRowOut(BaseModel):
 class AttendancePageOut(BaseModel):
     total: int
     items: list[AttendanceRowOut]
+
+
+class AttendanceUserStatsOut(BaseModel):
+    company_id: int
+    user_id: int
+    start_date: str  # YYYY-MM-DD (company timezone)
+    end_date: str    # YYYY-MM-DD (company timezone)
+
+    # user info
+    first_name: str | None = None
+    last_name: str | None = None
+    phone: str | None = None
+
+    days_total: int
+    days_present: int
+    days_absent: int
+    total_duration_min: int
+    avg_duration_min: float | None = None
+
+    # per-day detail (same shape as AttendanceRowOut)
+    days: list[AttendanceRowOut] = []

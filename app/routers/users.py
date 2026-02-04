@@ -131,9 +131,15 @@ async def delete_user_ep(
     if not u or u.company_id != company_id:
         raise HTTPException(404, "User not found")
 
-    u.status = "deleted"
-    db.add(u)
+    # IMPORTANT: hard-delete user (no soft status) as requested.
+    # EventLog doesn't have an FK to users, so we null-out the mapping to keep history.
+    db.query(EventLog).filter(
+        EventLog.company_id == company_id,
+        EventLog.user_id == u.id,
+    ).update({EventLog.user_id: None}, synchronize_session=False)
+
+    db.delete(u)
     db.commit()
 
-    await manager.broadcast_to_clients(company.id, {"type": "users.deleted", "data": {"user_id": u.id}})
+    await manager.broadcast_to_clients(company.id, {"type": "users.deleted", "data": {"user_id": user_id}})
     return {"ok": True}

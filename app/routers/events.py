@@ -10,7 +10,14 @@ from ..core.config import settings
 from ..core.db import get_db
 from ..deps import require_owner
 from ..models import EventLog, User
-from ..schemas import EventOut, EventOutDetailed, EventPageOut, AttendanceRowOut, AttendancePageOut
+from ..schemas import (
+    EventOut,
+    EventOutDetailed,
+    EventPageOut,
+    AttendanceRowOut,
+    AttendancePageOut,
+    AttendanceUserStatsOut,
+)
 
 router = APIRouter(prefix="/companies/{company_id}", tags=["events"])
 
@@ -265,3 +272,276 @@ def attendance_days(
     start_i = (page - 1) * limit
     end_i = start_i + limit
     return {"total": total, "items": items_all[start_i:end_i]}
+
+
+@router.get("/attendance/range", response_model=AttendancePageOut)
+def attendance_range_full(
+    company_id: int,
+    start_date: str | None = Query(None, description="YYYY-MM-DD (company timezone). Default: last 7 days"),
+    end_date: str | None = Query(None, description="YYYY-MM-DD (company timezone). Default: today"),
+    user_id: int | None = Query(None, description="If provided: only this user"),
+    q: str | None = Query(None, description="Search users by name/phone/employee_no"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    company=Depends(require_owner),
+):
+    """Full attendance grid.
+
+    - If filters are not provided, returns ALL users for the date range.
+    - If a user has no events on a day, returns the day with null first_in/last_out/duration and events_count=0.
+    """
+
+    try:
+        tz = ZoneInfo(settings.COMPANY_TZ)
+    except Exception:
+        tz = dt.timezone.utc
+
+    today = dt.datetime.now(tz).date()
+    end_d = dt.date.fromisoformat(end_date) if end_date else today
+    start_d = dt.date.fromisoformat(start_date) if start_date else (end_d - dt.timedelta(days=6))
+    if start_d > end_d:
+        start_d, end_d = end_d, start_d
+
+    # Users selection
+    u_q = db.query(User).filter(User.company_id == company_id)
+    if q:
+        qq = f"%{q.strip().lower()}%"
+        u_q = u_q.filter(
+            func.lower(User.first_name).like(qq)
+            | func.lower(User.last_name).like(qq)
+            | func.lower(func.coalesce(User.phone, "")).like(qq)
+            | func.lower(func.coalesce(User.employee_no, "")).like(qq)
+        )
+    if user_id is not None:
+        u_q = u_q.filter(User.id == user_id)
+
+    users = u_q.order_by(User.id.asc()).all()
+    if not users:
+        return {"total": 0, "items": []}
+
+    user_ids = [u.id for u in users]
+    umap = {u.id: u for u in users}
+
+    # Date list (inclusive)
+    days: list[dt.date] = []
+    d = start_d
+    while d <= end_d:
+        days.append(d)
+        d += dt.timedelta(days=1)
+
+    start_local = dt.datetime.combine(start_d, dt.time.min).replace(tzinfo=tz)
+    end_local = dt.datetime.combine(end_d, dt.time.min).replace(tzinfo=tz) + dt.timedelta(days=1)
+    start_utc = start_local.astimezone(dt.timezone.utc)
+    end_utc = end_local.astimezone(dt.timezone.utc)
+
+    # Events buckets
+    rows = (
+        db.query(EventLog.user_id, EventLog.ts)
+        .filter(
+            EventLog.company_id == company_id,
+            EventLog.user_id.isnot(None),
+            EventLog.user_id.in_(user_ids),
+            EventLog.ts >= start_utc,
+            EventLog.ts < end_utc,
+        )
+        .all()
+    )
+
+    buckets: dict[tuple[int, str], dict[str, Any]] = {}
+    for uid, ts in rows:
+        if uid is None:
+            continue
+        ts_utc = ts if ts.tzinfo else ts.replace(tzinfo=dt.timezone.utc)
+        local = ts_utc.astimezone(tz)
+        day_str = local.date().isoformat()
+        key = (int(uid), day_str)
+        b = buckets.get(key)
+        if not b:
+            buckets[key] = {"min": ts_utc, "max": ts_utc, "count": 1}
+        else:
+            b["count"] += 1
+            if ts_utc < b["min"]:
+                b["min"] = ts_utc
+            if ts_utc > b["max"]:
+                b["max"] = ts_utc
+
+    items_all: list[AttendanceRowOut] = []
+    for u in users:
+        for day in days:
+            day_str = day.isoformat()
+            info = buckets.get((u.id, day_str))
+            if info:
+                first_ts = info["min"]
+                last_ts = info["max"]
+                try:
+                    dur = int((last_ts - first_ts).total_seconds() // 60)
+                except Exception:
+                    dur = None
+                items_all.append(
+                    AttendanceRowOut(
+                        company_id=company_id,
+                        user_id=u.id,
+                        date=day_str,
+                        first_in=first_ts.astimezone(tz).isoformat() if first_ts else None,
+                        last_out=last_ts.astimezone(tz).isoformat() if last_ts else None,
+                        duration_min=dur,
+                        events_count=int(info["count"]),
+                        first_name=u.first_name,
+                        last_name=u.last_name,
+                        phone=u.phone,
+                    )
+                )
+            else:
+                items_all.append(
+                    AttendanceRowOut(
+                        company_id=company_id,
+                        user_id=u.id,
+                        date=day_str,
+                        first_in=None,
+                        last_out=None,
+                        duration_min=None,
+                        events_count=0,
+                        first_name=u.first_name,
+                        last_name=u.last_name,
+                        phone=u.phone,
+                    )
+                )
+
+    # Sort: newest date first, then user_id
+    items_all.sort(key=lambda x: (x.date, x.user_id), reverse=True)
+    total = len(items_all)
+    start_i = (page - 1) * limit
+    end_i = start_i + limit
+    return {"total": total, "items": items_all[start_i:end_i]}
+
+
+@router.get("/attendance/users/{user_id}/stats", response_model=AttendanceUserStatsOut)
+def attendance_user_stats(
+    company_id: int,
+    user_id: int,
+    start_date: str | None = Query(None, description="YYYY-MM-DD (company timezone). Default: last 7 days"),
+    end_date: str | None = Query(None, description="YYYY-MM-DD (company timezone). Default: today"),
+    db: Session = Depends(get_db),
+    company=Depends(require_owner),
+):
+    """Per-user attendance statistics for a date range."""
+
+    try:
+        tz = ZoneInfo(settings.COMPANY_TZ)
+    except Exception:
+        tz = dt.timezone.utc
+
+    u = db.query(User).filter(User.company_id == company_id, User.id == user_id).first()
+    if not u:
+        raise HTTPException(404, "User not found")
+
+    today = dt.datetime.now(tz).date()
+    end_d = dt.date.fromisoformat(end_date) if end_date else today
+    start_d = dt.date.fromisoformat(start_date) if start_date else (end_d - dt.timedelta(days=6))
+    if start_d > end_d:
+        start_d, end_d = end_d, start_d
+
+    # Date list (inclusive)
+    days_list: list[dt.date] = []
+    d = start_d
+    while d <= end_d:
+        days_list.append(d)
+        d += dt.timedelta(days=1)
+
+    start_local = dt.datetime.combine(start_d, dt.time.min).replace(tzinfo=tz)
+    end_local = dt.datetime.combine(end_d, dt.time.min).replace(tzinfo=tz) + dt.timedelta(days=1)
+    start_utc = start_local.astimezone(dt.timezone.utc)
+    end_utc = end_local.astimezone(dt.timezone.utc)
+
+    rows = (
+        db.query(EventLog.ts)
+        .filter(
+            EventLog.company_id == company_id,
+            EventLog.user_id == user_id,
+            EventLog.ts >= start_utc,
+            EventLog.ts < end_utc,
+        )
+        .all()
+    )
+
+    buckets: dict[str, dict[str, Any]] = {}
+    for (ts,) in rows:
+        ts_utc = ts if ts.tzinfo else ts.replace(tzinfo=dt.timezone.utc)
+        day_str = ts_utc.astimezone(tz).date().isoformat()
+        b = buckets.get(day_str)
+        if not b:
+            buckets[day_str] = {"min": ts_utc, "max": ts_utc, "count": 1}
+        else:
+            b["count"] += 1
+            if ts_utc < b["min"]:
+                b["min"] = ts_utc
+            if ts_utc > b["max"]:
+                b["max"] = ts_utc
+
+    days_out: list[AttendanceRowOut] = []
+    total_duration = 0
+    days_present = 0
+
+    for day in days_list:
+        day_str = day.isoformat()
+        info = buckets.get(day_str)
+        if info:
+            first_ts = info["min"]
+            last_ts = info["max"]
+            try:
+                dur = int((last_ts - first_ts).total_seconds() // 60)
+            except Exception:
+                dur = None
+            if dur is not None:
+                total_duration += max(dur, 0)
+            days_present += 1
+            days_out.append(
+                AttendanceRowOut(
+                    company_id=company_id,
+                    user_id=user_id,
+                    date=day_str,
+                    first_in=first_ts.astimezone(tz).isoformat() if first_ts else None,
+                    last_out=last_ts.astimezone(tz).isoformat() if last_ts else None,
+                    duration_min=dur,
+                    events_count=int(info["count"]),
+                    first_name=u.first_name,
+                    last_name=u.last_name,
+                    phone=u.phone,
+                )
+            )
+        else:
+            days_out.append(
+                AttendanceRowOut(
+                    company_id=company_id,
+                    user_id=user_id,
+                    date=day_str,
+                    first_in=None,
+                    last_out=None,
+                    duration_min=None,
+                    events_count=0,
+                    first_name=u.first_name,
+                    last_name=u.last_name,
+                    phone=u.phone,
+                )
+            )
+
+    days_total = len(days_list)
+    days_absent = days_total - days_present
+    avg = (total_duration / days_present) if days_present > 0 else None
+
+    return AttendanceUserStatsOut(
+        company_id=company_id,
+        user_id=user_id,
+        start_date=start_d.isoformat(),
+        end_date=end_d.isoformat(),
+        first_name=u.first_name,
+        last_name=u.last_name,
+        phone=u.phone,
+        days_total=days_total,
+        days_present=days_present,
+        days_absent=days_absent,
+        total_duration_min=total_duration,
+        avg_duration_min=avg,
+        days=days_out,
+    )
